@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Frontline Tactics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #020617; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; touch-action: none; }
+        canvas { display: block; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .interactive { pointer-events: auto; }
+        .unit-card { background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(59, 130, 246, 0.2); color: white; padding: 12px; border-radius: 12px; backdrop-filter: blur(12px); box-shadow: 0 10px 30px rgba(0,0,0,0.7); }
+        #minimap { width: 150px; height: 150px; background: rgba(0,0,0,0.5); border: 2px solid #1e293b; position: absolute; bottom: 20px; right: 20px; cursor: crosshair; }
+        .btn-ui { background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.1); padding: 8px 12px; border-radius: 6px; pointer-events: auto; transition: all 0.2s; font-size: 11px; text-transform: uppercase; font-weight: 600; }
+        .btn-ui:hover { background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.5); }
+        .btn-ui:active { transform: scale(0.95); }
+        .btn-primary { background: #2563eb; border-color: #3b82f6; }
+        .btn-primary:disabled { background: #1e293b; border-color: #334155; opacity: 0.5; }
+        .btn-worker { background: #7c3aed; border-color: #a78bfa; }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+    <!-- Top Bar -->
+    <div class="flex justify-between items-center p-4">
+        <div class="flex gap-3">
+            <div class="bg-slate-900/90 text-white px-4 py-2 rounded-lg border border-slate-700 flex items-center gap-2">
+                <span class="text-slate-500 text-[10px] font-bold">UNITS</span>
+                <span id="player-resources" class="font-mono font-bold">0/50</span>
+            </div>
+            <div class="bg-blue-600/10 text-blue-400 px-4 py-2 rounded-lg border border-blue-500/30 flex items-center gap-3">
+                <span class="font-bold text-[10px]">ENERGY</span>
+                <span id="energy-count" class="font-mono font-bold text-xl">0</span>
+            </div>
+            <div class="bg-red-600/10 text-red-400 px-4 py-2 rounded-lg border border-red-500/30 flex items-center gap-2">
+                <span class="text-[10px] font-bold">WAVE IN</span>
+                <span id="wave-timer" class="font-mono font-bold">02:00</span>
+            </div>
+        </div>
+        
+        <div class="flex gap-2">
+            <button onclick="resetCamera()" class="btn-ui">Center HQ</button>
+        </div>
+    </div>
+
+    <!-- Bottom UI -->
+    <div class="absolute bottom-5 left-5 flex flex-col gap-3">
+        <!-- Unit Selection -->
+        <div id="selection-panel" class="hidden interactive unit-card w-64">
+            <div class="flex justify-between items-start mb-3">
+                <div>
+                    <h3 id="sel-name" class="font-bold text-sm tracking-tight text-blue-100">Unit Name</h3>
+                    <p id="sel-type" class="text-[9px] text-slate-400 uppercase font-black">Status: Combat Active</p>
+                </div>
+                <div id="sel-hp-pill" class="bg-blue-500/20 text-blue-400 text-[9px] px-2 py-0.5 rounded border border-blue-500/30 font-bold">100%</div>
+            </div>
+
+            <div id="worker-actions" class="hidden border-t border-white/10 pt-3 mt-1 mb-2">
+                <p class="text-[9px] text-purple-400 font-bold mb-2 uppercase">Worker Protocol</p>
+                <button id="btn-build-hq" onclick="orderBuildHQ()" class="btn-ui btn-worker w-full flex justify-between items-center py-3">
+                    <span class="flex flex-col items-start">
+                        <span class="text-[10px]">DEPLOY NEW BASE</span>
+                        <span class="text-[8px] opacity-60 normal-case">(Worker Sacrificed)</span>
+                    </span>
+                    <span class="font-bold">400⚡</span>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
+                <button onclick="orderRetreat()" class="bg-slate-800 hover:bg-blue-900/40 text-[9px] py-2 rounded font-bold uppercase text-slate-300 transition-colors">Recall</button>
+                <button onclick="deselectAll()" class="bg-slate-800 hover:bg-slate-700 text-[9px] py-2 rounded font-bold uppercase text-slate-300 transition-colors">Deselect</button>
+            </div>
+        </div>
+
+        <!-- HQ Production -->
+        <div id="hq-panel" class="hidden interactive unit-card w-64">
+            <h3 class="font-bold border-b border-white/10 pb-2 mb-3 text-blue-400 flex justify-between items-center">
+                <span class="flex items-center gap-2">
+                    <div class="w-2 h-2 bg-blue-400 animate-pulse rounded-full"></div>
+                    COMMAND CENTER
+                </span>
+                <span id="hq-hp-text" class="text-[10px] font-mono text-white/40">100%</span>
+            </h3>
+            <div class="flex flex-col gap-2">
+                <button id="train-worker" onclick="trainUnit('WORKER')" class="btn-ui btn-worker w-full flex justify-between items-center">
+                    <span>Logistics Worker</span>
+                    <span>40⚡</span>
+                </button>
+                <button id="train-infantry" onclick="trainUnit('INFANTRY')" class="btn-ui btn-primary w-full flex justify-between items-center">
+                    <span>Infantry Squad</span>
+                    <span>50⚡</span>
+                </button>
+                <button id="train-tank" onclick="trainUnit('TANK')" class="btn-ui btn-primary w-full flex justify-between items-center">
+                    <span>Armored Div.</span>
+                    <span>100⚡</span>
+                </button>
+            </div>
+            
+            <div id="training-progress-container" class="hidden mt-4 p-3 bg-slate-900/50 rounded-lg border border-white/5">
+                <div class="text-[9px] uppercase text-blue-300 font-bold mb-1.5 flex justify-between">
+                    <span id="training-label">Building...</span>
+                    <span id="train-percent">0%</span>
+                </div>
+                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div id="train-progress-bar" class="h-full bg-blue-500 w-0 transition-all duration-300"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Minimap -->
+    <div id="minimap" class="rounded-xl overflow-hidden interactive shadow-2xl">
+        <canvas id="minimapCanvas"></canvas>
+    </div>
+    
+    <div id="overlay" class="hidden absolute inset-0 bg-slate-950/95 flex items-center justify-center interactive">
+        <div class="text-center p-10">
+            <h1 id="overlay-title" class="text-7xl font-black text-white mb-4 italic tracking-tighter">VICTORY</h1>
+            <p id="overlay-msg" class="text-slate-400 mb-8 max-w-sm mx-auto">Sector secured. Our expansion across the energy field continues.</p>
+            <button onclick="location.reload()" class="bg-blue-600 text-white px-12 py-4 rounded-full font-bold hover:bg-blue-500 transition-all uppercase tracking-widest shadow-lg shadow-blue-500/20">Restart Mission</button>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * FRONTLINE TACTICS
+ * Changes: Units fire while moving. Enemy wave system (2 min).
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const minimapCanvas = document.getElementById('minimapCanvas');
+const mctx = minimapCanvas.getContext('2d');
+
+const UI = {
+    resources: document.getElementById('player-resources'),
+    energy: document.getElementById('energy-count'),
+    waveTimer: document.getElementById('wave-timer'),
+    selPanel: document.getElementById('selection-panel'),
+    hqPanel: document.getElementById('hq-panel'),
+    selName: document.getElementById('sel-name'),
+    selType: document.getElementById('sel-type'),
+    selHpPill: document.getElementById('sel-hp-pill'),
+    workerActions: document.getElementById('worker-actions'),
+    hqHpText: document.getElementById('hq-hp-text'),
+    overlay: document.getElementById('overlay'),
+    overlayTitle: document.getElementById('overlay-title'),
+    overlayMsg: document.getElementById('overlay-msg'),
+    trainBar: document.getElementById('train-progress-bar'),
+    trainContainer: document.getElementById('training-progress-container'),
+    trainPercent: document.getElementById('train-percent'),
+    trainLabel: document.getElementById('training-label'),
+    btnInfantry: document.getElementById('train-infantry'),
+    btnTank: document.getElementById('train-tank'),
+    btnWorker: document.getElementById('train-worker'),
+    btnBuildHQ: document.getElementById('btn-build-hq')
+};
+
+const MAP_SIZE = 4000;
+const TILE_SIZE = 400;
+const FOG_RADIUS = 450;
+const MAX_UNITS = 100;
+const WAVE_INTERVAL = 120000; // 2 minutes
+
+let playerUnits = [];
+let enemyUnits = [];
+let resources = [];
+let effects = [];
+let camera = { x: 0, y: 0 };
+let selectedUnits = [];
+let playerEnergy = 200; 
+let lastWaveTime = Date.now();
+
+let isDrawingBox = false, isPanningCamera = false, isInteractingWithMinimap = false;
+let isAdditiveSelection = false;
+let dragStartX = 0, dragStartY = 0, currentMouseX = 0, currentMouseY = 0, lastMouseX = 0, lastMouseY = 0;
+let gameActive = true;
+
+const UNIT_TYPES = {
+    TANK: { hp: 400, speed: 1.4, range: 240, damage: 35, color: '#3b82f6', size: 30, label: 'Armored Div.', cost: 100, buildTime: 7000 },
+    INFANTRY: { hp: 130, speed: 1.9, range: 170, damage: 15, color: '#10b981', size: 16, label: 'Infantry Squad', cost: 50, buildTime: 4000 },
+    WORKER: { hp: 90, speed: 2.6, range: 50, damage: 0, color: '#a78bfa', size: 14, label: 'Logistics Worker', cost: 40, buildTime: 3000 },
+    HQ: { hp: 2500, speed: 0, range: 350, damage: 45, color: '#ffffff', size: 85, label: 'Command Center', cost: 400, buildTime: 12000 }
+};
+
+class ResourceNode {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.size = 35 + Math.random() * 30;
+    }
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        const pulse = (Math.sin(Date.now() / 600) + 1) / 2;
+        ctx.shadowBlur = 15 + pulse * 10;
+        ctx.shadowColor = '#60a5fa';
+        ctx.fillStyle = '#1e40af';
+        ctx.beginPath();
+        for(let i=0; i<6; i++) {
+            let angle = (i * Math.PI * 2) / 6;
+            let r = this.size * (i % 2 === 0 ? 1 : 0.6);
+            ctx.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#93c5fd';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+class Unit {
+    constructor(x, y, team, type) {
+        this.x = x;
+        this.y = y;
+        this.team = team;
+        this.type = type;
+        this.stats = { ...UNIT_TYPES[type] };
+        this.hp = this.stats.hp;
+        this.targetPos = { x, y };
+        this.targetEnemy = null;
+        this.angle = Math.random() * Math.PI * 2;
+        this.lastShot = 0;
+        this.revealed = team === 'player';
+        
+        // Worker Logic
+        this.cargo = 0;
+        this.maxCargo = 15;
+        this.targetNode = null;
+        this.isManuallyMoving = false;
+        
+        // HQ State
+        this.buildQueue = null;
+        this.buildStartTime = 0;
+    }
+
+    update() {
+        if (this.hp <= 0) return;
+
+        // HQ Training
+        if (this.type === 'HQ' && this.buildQueue) {
+            const elapsed = Date.now() - this.buildStartTime;
+            if (elapsed >= UNIT_TYPES[this.buildQueue].buildTime) {
+                playerUnits.push(new Unit(this.x + 120, this.y + 120, 'player', this.buildQueue));
+                this.buildQueue = null;
+            }
+        }
+
+        // Worker Automation
+        if (this.type === 'WORKER') {
+            const hqs = playerUnits.filter(u => u.type === 'HQ');
+            if (!this.isManuallyMoving) {
+                if (this.cargo >= this.maxCargo) {
+                    let nearestHQ = hqs.sort((a,b) => Math.hypot(this.x-a.x, this.y-a.y) - Math.hypot(this.x-b.x, this.y-b.y))[0];
+                    if (nearestHQ) {
+                        this.targetPos = { x: nearestHQ.x, y: nearestHQ.y };
+                        if (Math.hypot(this.x - nearestHQ.x, this.y - nearestHQ.y) < 80) {
+                            playerEnergy += Math.floor(this.cargo);
+                            this.cargo = 0;
+                        }
+                    }
+                } else {
+                    if (!this.targetNode || Math.hypot(this.x - this.targetNode.x, this.y - this.targetNode.y) > 800) {
+                        this.targetNode = resources.sort((a,b) => Math.hypot(this.x-a.x, this.y-a.y) - Math.hypot(this.x-b.x, this.y-b.y))[0];
+                    }
+                    if (this.targetNode) {
+                        this.targetPos = { x: this.targetNode.x, y: this.targetNode.y };
+                        if (Math.hypot(this.x - this.targetNode.x, this.y - this.targetNode.y) < 50) {
+                            this.cargo += 0.15;
+                        }
+                    }
+                }
+            } else if (Math.hypot(this.x - this.targetPos.x, this.y - this.targetPos.y) < 15) {
+                this.isManuallyMoving = false;
+            }
+        }
+
+        // Improved Combat AI (Fire while moving)
+        if (this.stats.damage > 0) {
+            // Re-acquire target if lost or dead
+            if (!this.targetEnemy || this.targetEnemy.hp <= 0) {
+                let enemies = this.team === 'player' ? enemyUnits : playerUnits;
+                let closest = null, minDist = this.stats.range * 1.5;
+                enemies.forEach(e => {
+                    if (e.hp > 0 && (this.team === 'enemy' || e.revealed)) {
+                        let d = Math.hypot(e.x - this.x, e.y - this.y);
+                        if (d < minDist) { minDist = d; closest = e; }
+                    }
+                });
+                this.targetEnemy = closest;
+            }
+            
+            // Attack logic: independent of movement
+            if (this.targetEnemy && this.targetEnemy.hp > 0) {
+                let d = Math.hypot(this.targetEnemy.x - this.x, this.targetEnemy.y - this.y);
+                if (d < this.stats.range && Date.now() - this.lastShot > 1100) {
+                    this.fire(this.targetEnemy);
+                    this.lastShot = Date.now();
+                }
+            }
+        }
+
+        // Enemy Movement Logic (Target HQ)
+        if (this.team === 'enemy' && this.type !== 'HQ' && Math.hypot(this.x - this.targetPos.x, this.y - this.targetPos.y) < 100) {
+            const hq = playerUnits.find(u => u.type === 'HQ');
+            if (hq) this.targetPos = { x: hq.x, y: hq.y };
+        }
+
+        // Movement Execution
+        let dx = this.targetPos.x - this.x, dy = this.targetPos.y - this.y;
+        let dist = Math.hypot(dx, dy);
+        if (dist > 5) {
+            this.angle = Math.atan2(dy, dx);
+            this.x += Math.cos(this.angle) * this.stats.speed;
+            this.y += Math.sin(this.angle) * this.stats.speed;
+        }
+    }
+
+    fire(enemy) {
+        enemy.hp -= this.stats.damage;
+        effects.push({ type: 'tracer', x1: this.x, y1: this.y, x2: enemy.x, y2: enemy.y, life: 10 });
+    }
+
+    draw(ctx) {
+        if (!this.revealed && this.team === 'enemy') return;
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        if (selectedUnits.includes(this)) {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.stats.size + 15, 0, Math.PI * 2);
+            ctx.strokeStyle = this.type === 'WORKER' ? '#a78bfa' : '#fbbf24';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        ctx.rotate(this.angle);
+        ctx.fillStyle = this.team === 'player' ? this.stats.color : '#f43f5e';
+        
+        if (this.type === 'HQ') {
+            ctx.fillRect(-this.stats.size/2, -this.stats.size/2, this.stats.size, this.stats.size);
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(-this.stats.size/2, -this.stats.size/2, this.stats.size, this.stats.size);
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(this.stats.size, 0);
+            ctx.lineTo(-this.stats.size/2, -this.stats.size/2);
+            ctx.lineTo(-this.stats.size/2, this.stats.size/2);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        ctx.rotate(-this.angle);
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(-20, -this.stats.size - 12, 40, 4);
+        ctx.fillStyle = this.team === 'player' ? '#10b981' : '#f43f5e';
+        ctx.fillRect(-20, -this.stats.size - 12, 40 * (this.hp / this.stats.hp), 4);
+        ctx.restore();
+    }
+}
+
+function init() {
+    resize();
+    playerUnits.push(new Unit(300, 300, 'player', 'HQ'));
+    for(let i=0; i<10; i++) playerUnits.push(new Unit(200 + Math.random()*250, 200 + Math.random()*250, 'player', 'INFANTRY'));
+    for(let i=0; i<5; i++) playerUnits.push(new Unit(300 + Math.random()*200, 300 + Math.random()*200, 'player', 'TANK'));
+    for(let i=0; i<8; i++) playerUnits.push(new Unit(400 + Math.random()*100, 400 + Math.random()*100, 'player', 'WORKER'));
+
+    for(let i=0; i<25; i++) resources.push(new ResourceNode(300 + Math.random()*(MAP_SIZE-600), 300 + Math.random()*(MAP_SIZE-600)));
+    enemyUnits.push(new Unit(MAP_SIZE - 400, MAP_SIZE - 400, 'enemy', 'HQ'));
+    for(let i=0; i<15; i++) spawnEnemyUnit('TANK', MAP_SIZE - 500, MAP_SIZE - 500);
+    
+    requestAnimationFrame(gameLoop);
+}
+
+function spawnEnemyUnit(type, x, y) {
+    const unit = new Unit(x + (Math.random()-0.5)*100, y + (Math.random()-0.5)*100, 'enemy', type);
+    const hq = playerUnits.find(u => u.type === 'HQ');
+    if (hq) unit.targetPos = { x: hq.x, y: hq.y };
+    enemyUnits.push(unit);
+}
+
+function handleWaves() {
+    const now = Date.now();
+    const timeRemaining = WAVE_INTERVAL - (now - lastWaveTime);
+    
+    if (timeRemaining <= 0) {
+        lastWaveTime = now;
+        // Spawn Wave
+        const enemyHQ = enemyUnits.find(u => u.type === 'HQ');
+        if (enemyHQ) {
+            for(let i=0; i<5; i++) spawnEnemyUnit('TANK', enemyHQ.x, enemyHQ.y);
+            for(let i=0; i<10; i++) spawnEnemyUnit('INFANTRY', enemyHQ.x, enemyHQ.y);
+        }
+    }
+
+    const mins = Math.floor(Math.max(0, timeRemaining) / 60000);
+    const secs = Math.floor((Math.max(0, timeRemaining) % 60000) / 1000);
+    UI.waveTimer.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function trainUnit(type) {
+    const hq = selectedUnits.find(u => u.type === 'HQ');
+    if (!hq || hq.buildQueue) return;
+    const cost = UNIT_TYPES[type].cost;
+    if (playerEnergy >= cost) {
+        playerEnergy -= cost;
+        hq.buildQueue = type;
+        hq.buildStartTime = Date.now();
+    }
+}
+
+function orderBuildHQ() {
+    const worker = selectedUnits.find(u => u.type === 'WORKER');
+    if (!worker || playerEnergy < 400) return;
+    playerEnergy -= 400;
+    playerUnits.push(new Unit(worker.x, worker.y, 'player', 'HQ'));
+    effects.push({ type: 'nova', x: worker.x, y: worker.y, life: 40 });
+    worker.hp = 0; 
+}
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    minimapCanvas.width = 150;
+    minimapCanvas.height = 150;
+}
+
+function gameLoop() {
+    if (!gameActive) return;
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function update() {
+    playerUnits = playerUnits.filter(u => u.hp > 0);
+    enemyUnits = enemyUnits.filter(u => u.hp > 0);
+    selectedUnits = selectedUnits.filter(u => u.hp > 0);
+
+    // Check Victory/Loss
+    const pBase = playerUnits.find(u => u.type === 'HQ');
+    const eBase = enemyUnits.find(u => u.type === 'HQ');
+    
+    if (!pBase && gameActive) endGame("DEFEAT", "Our headquarters has fallen. Retreat to the outer rim.");
+    if (!eBase && gameActive) endGame("VICTORY", "Sector secured. The enemy command center has been neutralized.");
+
+    playerUnits.forEach(u => u.update());
+    enemyUnits.forEach(u => u.update());
+
+    enemyUnits.forEach(e => {
+        e.revealed = false;
+        playerUnits.forEach(p => { if (Math.hypot(p.x - e.x, p.y - e.y) < FOG_RADIUS) e.revealed = true; });
+    });
+
+    effects.forEach(f => f.life--);
+    effects = effects.filter(f => f.life > 0);
+
+    UI.resources.innerText = `${playerUnits.length}/${MAX_UNITS}`;
+    UI.energy.innerText = Math.floor(playerEnergy);
+    UI.btnInfantry.disabled = playerEnergy < 50;
+    UI.btnTank.disabled = playerEnergy < 100;
+    UI.btnWorker.disabled = playerEnergy < 40;
+    UI.btnBuildHQ.disabled = playerEnergy < 400;
+
+    handleWaves();
+    updateUI();
+}
+
+function endGame(title, msg) {
+    gameActive = false;
+    UI.overlay.classList.remove('hidden');
+    UI.overlayTitle.innerText = title;
+    UI.overlayMsg.innerText = msg;
+}
+
+function updateUI() {
+    const hq = selectedUnits.find(u => u.type === 'HQ');
+    const worker = selectedUnits.find(u => u.type === 'WORKER');
+    
+    if (hq && selectedUnits.length === 1) {
+        UI.hqPanel.classList.remove('hidden');
+        UI.selPanel.classList.add('hidden');
+        UI.hqHpText.innerText = Math.round((hq.hp/hq.stats.hp)*100) + "%";
+        if (hq.buildQueue) {
+            UI.trainContainer.classList.remove('hidden');
+            UI.trainLabel.innerText = "Producing " + hq.buildQueue;
+            const prog = (Date.now() - hq.buildStartTime) / UNIT_TYPES[hq.buildQueue].buildTime;
+            UI.trainBar.style.width = (prog * 100) + "%";
+            UI.trainPercent.innerText = Math.floor(prog * 100) + "%";
+        } else UI.trainContainer.classList.add('hidden');
+    } else if (selectedUnits.length > 0) {
+        UI.hqPanel.classList.add('hidden');
+        UI.selPanel.classList.remove('hidden');
+        UI.selName.innerText = selectedUnits.length === 1 ? selectedUnits[0].stats.label : selectedUnits.length + " Units Selected";
+        const avgHp = selectedUnits.reduce((a, b) => a + (b.hp/b.stats.hp), 0) / selectedUnits.length;
+        UI.selHpPill.innerText = Math.round(avgHp * 100) + "%";
+        if (worker && selectedUnits.length === 1) UI.workerActions.classList.remove('hidden');
+        else UI.workerActions.classList.add('hidden');
+    } else {
+        UI.hqPanel.classList.add('hidden');
+        UI.selPanel.classList.add('hidden');
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#020617';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.05)';
+    for(let x=0; x<=MAP_SIZE; x+=TILE_SIZE) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAP_SIZE); ctx.stroke(); }
+    for(let y=0; y<=MAP_SIZE; y+=TILE_SIZE) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(MAP_SIZE, y); ctx.stroke(); }
+
+    resources.forEach(r => r.draw(ctx));
+    playerUnits.forEach(u => u.draw(ctx));
+    enemyUnits.forEach(u => u.draw(ctx));
+
+    effects.forEach(f => {
+        if (f.type === 'tracer') {
+            ctx.strokeStyle = `rgba(147, 197, 253, ${f.life/10})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(f.x1, f.y1); ctx.lineTo(f.x2, f.y2); ctx.stroke();
+        } else if (f.type === 'move') {
+            const r = 20 - f.life;
+            ctx.strokeStyle = `rgba(251, 191, 36, ${f.life/20})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(f.x, f.y, r, 0, Math.PI*2); ctx.stroke();
+        } else if (f.type === 'nova') {
+            ctx.fillStyle = `rgba(167, 139, 250, ${f.life/40})`;
+            ctx.beginPath(); ctx.arc(f.x, f.y, (40-f.life)*4, 0, Math.PI*2); ctx.fill();
+        }
+    });
+
+    ctx.restore();
+
+    if (isDrawingBox) {
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(dragStartX, dragStartY, currentMouseX - dragStartX, currentMouseY - dragStartY);
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
+        ctx.fillRect(dragStartX, dragStartY, currentMouseX - dragStartX, currentMouseY - dragStartY);
+    }
+
+    drawMinimap();
+}
+
+function drawMinimap() {
+    mctx.fillStyle = '#020617';
+    mctx.fillRect(0, 0, 150, 150);
+    const s = 150 / MAP_SIZE;
+    resources.forEach(r => { mctx.fillStyle = '#1d4ed8'; mctx.fillRect(r.x*s-1, r.y*s-1, 2, 2); });
+    playerUnits.forEach(u => {
+        mctx.fillStyle = u.type === 'HQ' ? '#fff' : (u.type === 'WORKER' ? '#a78bfa' : '#3b82f6');
+        mctx.fillRect(u.x*s-1, u.y*s-1, 2.5, 2.5);
+    });
+    enemyUnits.forEach(u => { if (u.revealed) { mctx.fillStyle = '#ef4444'; mctx.fillRect(u.x*s-1, u.y*s-1, 2.5, 2.5); } });
+    mctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    mctx.strokeRect(camera.x*s, camera.y*s, canvas.width*s, canvas.height*s);
+}
+
+function resetCamera() {
+    const hq = playerUnits.find(u => u.type === 'HQ');
+    if (hq) { camera.x = hq.x - canvas.width/2; camera.y = hq.y - canvas.height/2; clampCamera(); }
+}
+
+function clampCamera() {
+    camera.x = Math.max(0, Math.min(camera.x, MAP_SIZE - canvas.width));
+    camera.y = Math.max(0, Math.min(camera.y, MAP_SIZE - canvas.height));
+}
+
+function handleMinimap(e) {
+    const r = minimapCanvas.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+    camera.x = (x * (MAP_SIZE/150)) - (canvas.width/2);
+    camera.y = (y * (MAP_SIZE/150)) - (canvas.height/2);
+    clampCamera();
+}
+
+function handleDown(x, y, add = false) {
+    dragStartX = x; dragStartY = y; currentMouseX = x; currentMouseY = y;
+    const wx = x + camera.x, wy = y + camera.y;
+    let clicked = playerUnits.find(u => Math.hypot(u.x - wx, u.y - wy) < 50);
+    
+    if (clicked) {
+        if (add) {
+            if (selectedUnits.includes(clicked)) selectedUnits = selectedUnits.filter(u => u !== clicked);
+            else selectedUnits.push(clicked);
+        } else selectedUnits = [clicked];
+        isDrawingBox = false;
+    } else if (selectedUnits.length > 0 && !add) {
+        issueMove(wx, wy);
+        isDrawingBox = false;
+    } else {
+        isDrawingBox = true;
+    }
+}
+
+function issueMove(tx, ty) {
+    effects.push({ type: 'move', x: tx, y: ty, life: 20 });
+    selectedUnits.forEach((u, i) => {
+        if (u.type === 'HQ') return;
+        const row = Math.floor(i / 5), col = i % 5;
+        u.targetPos = { x: tx + (col - 2) * 50, y: ty + (row - 2) * 50 };
+        if (u.type === 'WORKER') {
+            u.isManuallyMoving = true;
+            const node = resources.find(r => Math.hypot(r.x - tx, r.y - ty) < 70);
+            if (node) { u.targetNode = node; u.isManuallyMoving = false; }
+        }
+    });
+}
+
+function handleUp(x, y) {
+    if (isDrawingBox) {
+        const l = Math.min(dragStartX, x) + camera.x, r = Math.max(dragStartX, x) + camera.x;
+        const t = Math.min(dragStartY, y) + camera.y, b = Math.max(dragStartY, y) + camera.y;
+        if (Math.hypot(x - dragStartX, y - dragStartY) > 10) {
+            const boxUnits = playerUnits.filter(u => u.x >= l && u.x <= r && u.y >= t && u.y <= b);
+            selectedUnits = isAdditiveSelection ? [...new Set([...selectedUnits, ...boxUnits])] : boxUnits;
+        } else if (!isAdditiveSelection) selectedUnits = [];
+    }
+    isDrawingBox = false; isPanningCamera = false; isInteractingWithMinimap = false;
+}
+
+function deselectAll() { selectedUnits = []; }
+function orderRetreat() {
+    const hq = playerUnits.filter(u => u.type === 'HQ').sort((a,b) => Math.hypot(a.x-camera.x, a.y-camera.y) - Math.hypot(b.x-camera.x, b.y-camera.y))[0];
+    if (hq) issueMove(hq.x, hq.y);
+}
+
+window.addEventListener('mousedown', e => {
+    if (e.target.closest('.interactive')) return;
+    lastMouseX = e.clientX; lastMouseY = e.clientY;
+    if (e.button === 2) { isPanningCamera = true; isDrawingBox = false; }
+    else handleDown(e.clientX, e.clientY, e.shiftKey);
+});
+window.addEventListener('mousemove', e => {
+    currentMouseX = e.clientX; currentMouseY = e.clientY;
+    if (isInteractingWithMinimap) handleMinimap(e);
+    else if (isPanningCamera) { camera.x -= (e.clientX - lastMouseX); camera.y -= (e.clientY - lastMouseY); clampCamera(); }
+    lastMouseX = e.clientX; lastMouseY = e.clientY;
+});
+window.addEventListener('mouseup', e => handleUp(e.clientX, e.clientY));
+window.addEventListener('contextmenu', e => e.preventDefault());
+minimapCanvas.addEventListener('mousedown', e => { isInteractingWithMinimap = true; handleMinimap(e); });
+
+window.addEventListener('touchstart', e => {
+    if (e.target.closest('.interactive')) { if (e.target.closest('#minimap')) { isInteractingWithMinimap = true; handleMinimap(e); } return; }
+    lastMouseX = e.touches[0].clientX; lastMouseY = e.touches[0].clientY;
+    if (e.touches.length >= 2) { isPanningCamera = true; isDrawingBox = false; }
+    else handleDown(e.touches[0].clientX, e.touches[0].clientY, false);
+}, {passive: false});
+window.addEventListener('touchmove', e => {
+    currentMouseX = e.touches[0].clientX; currentMouseY = e.touches[0].clientY;
+    if (isInteractingWithMinimap) handleMinimap(e);
+    else if (isPanningCamera) { camera.x -= (e.touches[0].clientX - lastMouseX); camera.y -= (e.touches[0].clientY - lastMouseY); clampCamera(); }
+    lastMouseX = e.touches[0].clientX; lastMouseY = e.touches[0].clientY;
+}, {passive: false});
+window.addEventListener('touchend', e => { if (e.changedTouches.length > 0) handleUp(e.changedTouches[0].clientX, e.changedTouches[0].clientY); });
+
+window.onload = init;
+window.onresize = resize;
+</script>
+</body>
+</html>
+
+
